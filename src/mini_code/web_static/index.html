@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>MiniCode M4 · Agent Console</title>
+  <meta name="description" content="MiniCode 本地 Coding Agent 运行、事件与验证控制台">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/diff.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">M</span><div><strong>MiniCode</strong><small>M4 Agent Console</small></div></div>
+      <button class="new-run" id="new-run" type="button">＋ 新建任务</button>
+      <div class="section-label">运行记录</div>
+      <nav id="run-list" aria-label="运行记录"><p class="muted">正在读取…</p></nav>
+      <footer><span class="live-dot"></span>仅限本机 · workspace 已固定</footer>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div><p class="eyebrow">CODING AGENT / LIVE TRACE</p><h1 id="page-title">运行控制台</h1></div>
+        <div id="connection" class="connection">离线视图</div>
+      </header>
+
+      <section class="composer" id="composer">
+        <label for="task">交给 MiniCode 一个可验证的编程任务</label>
+        <textarea id="task" rows="4" maxlength="8000" placeholder="例如：修复 calculator.py 的除零错误，运行测试并查看 Diff。"></textarea>
+        <div class="composer-row"><p>Agent 会建立计划、Patch、测试，并保存 checkpoint。</p><button id="start-run" type="button">开始运行 <span>↗</span></button></div>
+        <p class="form-error" id="form-error" role="alert"></p>
+      </section>
+
+      <section class="run-view hidden" id="run-view">
+        <div class="run-heading">
+          <div><div class="run-meta"><span id="status" class="status">—</span><code id="run-id"></code></div><h2 id="task-title"></h2></div>
+          <button id="cancel-run" class="danger" type="button">取消运行</button>
+        </div>
+
+        <div class="metrics" id="metrics"></div>
+
+        <div class="grid">
+          <article class="panel">
+            <div class="panel-title"><h3>执行计划</h3><span id="step-label"></span></div>
+            <ol class="plan" id="plan"><li class="muted">等待 Agent 创建计划</li></ol>
+          </article>
+          <article class="panel">
+            <div class="panel-title"><h3>变更与验证</h3></div>
+            <div id="evidence" class="evidence"></div>
+          </article>
+        </div>
+
+        <article class="panel diff-panel">
+          <div class="panel-title"><h3>Session Diff</h3><span>最近一次 git_diff 证据</span></div>
+          <pre id="diff">等待 Agent 查看 Diff</pre>
+        </article>
+
+        <article class="panel timeline-panel">
+          <div class="panel-title"><h3>实时事件</h3><span id="event-count">0 events</span></div>
+          <div id="timeline" class="timeline" aria-live="polite"></div>
+        </article>
+      </section>
+    </main>
+  </div>
+  <script src="/app.js" defer></script>
+</body>
+</html>

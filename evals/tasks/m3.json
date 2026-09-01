@@ -1,0 +1,22 @@
+[
+  {"id":"abs_diff_order","category":"math","spec":"abs_diff","task":"修复 abs_diff，使参数顺序不影响结果，并完成测试与 Diff 验证。"},
+  {"id":"clamp_middle","category":"boundary","spec":"clamp","task":"修复 clamp 对区间内部值的处理，并完成测试与 Diff 验证。"},
+  {"id":"divide_zero","category":"boundary","spec":"safe_divide","task":"修复 safe_divide 的除零行为，使其返回 None，并完成验证。"},
+  {"id":"empty_first","category":"boundary","spec":"first_or_none","task":"修复 first_or_none 对空列表的处理，并完成验证。"},
+  {"id":"email_spaces","category":"normalization","spec":"normalize_email","task":"修复 normalize_email，使其去除首尾空白并转为小写。"},
+  {"id":"palindrome_case","category":"normalization","spec":"palindrome","task":"修复 is_palindrome，使判断忽略大小写。"},
+  {"id":"factorial_zero","category":"recursion","spec":"factorial","task":"修复 factorial(0) 的返回值。"},
+  {"id":"fibonacci_zero","category":"recursion","spec":"fibonacci","task":"修复 fibonacci(0) 的返回值，同时保持已有行为。"},
+  {"id":"unique_order","category":"collection","spec":"unique_order","task":"修复 unique_order，使其去重并保持首次出现顺序。"},
+  {"id":"chunk_remainder","category":"collection","spec":"chunks","task":"修复 chunks 丢失最后不足一个分组的元素的问题。"},
+  {"id":"parse_bool_case","category":"parsing","spec":"parse_bool","task":"修复 parse_bool，使其忽略大小写和首尾空白。"},
+  {"id":"average_empty","category":"boundary","spec":"average","task":"修复 average 对空列表的处理，使其返回 None。"},
+  {"id":"slug_whitespace","category":"normalization","spec":"slugify","task":"修复 slugify，使连续空白折叠为一个连字符。"},
+  {"id":"retry_exponential","category":"logic","spec":"retry_delay","task":"修复 retry_delay，使其按 base * 2^(attempt-1) 指数退避。"},
+  {"id":"pagination_first","category":"boundary","spec":"page_offset","task":"修复一页制 page_offset 在第一页时的偏移量。"},
+  {"id":"merge_override","category":"mapping","spec":"merge_defaults","task":"修复 merge_defaults，使 overrides 覆盖 defaults。"},
+  {"id":"bounded_lower","category":"boundary","spec":"bounded_add","task":"修复 bounded_add，使结果同时受下界和上界限制。"},
+  {"id":"word_whitespace","category":"parsing","spec":"count_words","task":"修复 count_words 对多余空白和空字符串的统计。"},
+  {"id":"extension_missing","category":"parsing","spec":"extension","task":"修复 extension 对无扩展名文件的处理，使其返回空字符串。"},
+  {"id":"coalesce_zero","category":"logic","spec":"coalesce","task":"修复 coalesce，使其仅在 primary 为 None 时使用 fallback。"}
+]

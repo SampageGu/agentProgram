@@ -1,0 +1,17 @@
+[
+  {
+    "id": "zero_division",
+    "template": "examples/m1_zero_division",
+    "task": "修复 calculator.py 中除数为零时崩溃的问题，使 safe_divide 返回 None；检查实现和测试，完成修改、测试与 Diff 验证。"
+  },
+  {
+    "id": "clamp_inside_range",
+    "template": "examples/m1_clamp",
+    "task": "修复 clamp 在输入位于上下界之间时返回错误值的问题；检查实现和测试，完成修改、测试与 Diff 验证。"
+  },
+  {
+    "id": "normalize_tags",
+    "template": "examples/m1_tags",
+    "task": "修复 normalize_tags，使其去除空标签、按首次出现顺序去重，同时保留现有规范化行为；完成测试和 Diff 验证。"
+  }
+]

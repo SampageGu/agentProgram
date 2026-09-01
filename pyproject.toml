@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mini-code-agent"
+version = "0.7.0"
+description = "A resumable coding agent with safe patch loops and compacted context."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+mini-code = "mini_code.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

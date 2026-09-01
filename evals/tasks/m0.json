@@ -1,0 +1,33 @@
+[
+  {
+    "id": "cli_entry",
+    "question": "MiniCode 的 CLI 入口在哪里？ask 命令接收哪些主要参数？请引用代码行。",
+    "expected_paths": ["src/mini_code/cli.py"],
+    "expected_terms": ["workspace", "env-file"]
+  },
+  {
+    "id": "deepseek_config",
+    "question": "项目在哪里读取 DeepSeek API Key、Base URL 和模型名？默认模型是什么？请引用代码行。",
+    "expected_paths": ["src/mini_code/config.py"],
+    "expected_terms": ["DEEPSEEK_API_KEY", "deepseek-v4-flash"]
+  },
+  {
+    "id": "readonly_tools",
+    "question": "M0 向模型暴露了哪些只读工具？分别有什么用途？请引用实现位置。",
+    "expected_paths": ["src/mini_code/tools/readonly.py"],
+    "expected_terms": ["list_files", "search_code", "read_file"]
+  },
+  {
+    "id": "trace_persistence",
+    "question": "Agent 事件如何持久化？一次运行的 Trace 保存在哪里？请引用代码行。",
+    "expected_paths": ["src/mini_code/events.py", "src/mini_code/cli.py"],
+    "expected_terms": ["events.jsonl", "run_id"]
+  },
+  {
+    "id": "path_security",
+    "question": "M0 如何阻止模型读取工作区之外的文件？请说明检查逻辑并引用代码行。",
+    "expected_paths": ["src/mini_code/workspace.py"],
+    "expected_terms": ["relative_to", "workspace"]
+  }
+]
+
