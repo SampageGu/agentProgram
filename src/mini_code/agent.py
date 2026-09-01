@@ -37,6 +37,13 @@ Rules:
 
 PROMPT_VERSION = "coding-m5-v1"
 
+CHAT_SYSTEM_PROMPT = """You are MiniCode's concise conversational assistant.
+Reply naturally to greetings, capability questions, and general conversation.
+You have no repository tools in this mode. Never claim that you inspected or changed files.
+If the user asks for repository evidence or a code change, tell them to use Auto or Coding mode.
+Use the user's language and keep simple social replies brief.
+"""
+
 
 CODING_SYSTEM_PROMPT = """You are MiniCode, a resumable parent Coding Agent in milestone M5.
 
@@ -85,6 +92,8 @@ class ReadOnlyAgent:
         context_manager: ContextManager | None = None,
         should_stop: Callable[[], bool] | None = None,
         max_total_tokens: int | None = None,
+        require_tool_evidence: bool = True,
+        include_repository_map: bool = True,
     ) -> None:
         self.provider = provider
         self.workspace = workspace
@@ -99,6 +108,8 @@ class ReadOnlyAgent:
         if max_total_tokens is not None and max_total_tokens <= 0:
             raise ValueError("max_total_tokens must be positive")
         self.max_total_tokens = max_total_tokens
+        self.require_tool_evidence = require_tool_evidence
+        self.include_repository_map = include_repository_map
 
     def run(
         self,
@@ -109,18 +120,21 @@ class ReadOnlyAgent:
     ) -> RunResult:
         run_id = run_id or uuid.uuid4().hex[:12]
         if resume_snapshot is None:
-            repository_map = self.workspace.repository_map()
             self._emit(run_id, "run_started", f"任务 {run_id}，模型 {self.provider.model}", task=task)
-            self._emit(
-                run_id,
-                "repository_mapped",
-                "已建立两层仓库地图",
-                repository_map=repository_map,
-            )
+            workspace_context = ""
+            if self.include_repository_map:
+                repository_map = self.workspace.repository_map()
+                workspace_context = f"\nWorkspace map:\n{repository_map}"
+                self._emit(
+                    run_id,
+                    "repository_mapped",
+                    "已建立两层仓库地图",
+                    repository_map=repository_map,
+                )
             messages: list[dict[str, Any]] = [
                 {
                     "role": "system",
-                    "content": self.system_prompt + f"\nWorkspace map:\n{repository_map}",
+                    "content": self.system_prompt + workspace_context,
                 },
                 *[dict(message) for message in (history or [])],
                 {"role": "user", "content": task},
@@ -234,13 +248,13 @@ class ReadOnlyAgent:
                 )
 
             if not tool_calls:
-                if not used_tool_this_run:
+                if self.require_tool_evidence and not used_tool_this_run:
                     messages.append({"role": "assistant", "content": content})
                     messages.append(
                         {
                             "role": "user",
                             "content": (
-                                "M0 requires repository evidence. Call at least one available tool "
+                                "This run requires repository evidence. Call at least one available tool "
                                 "before giving the final answer."
                             ),
                         }
@@ -538,6 +552,32 @@ class CodingAgent(ReadOnlyAgent):
             context_manager=context_manager,
             should_stop=should_stop,
             max_total_tokens=max_total_tokens,
+        )
+
+
+class ChatAgent(ReadOnlyAgent):
+    """M4.2 zero-tool conversational path that still persists and streams a Run."""
+
+    def __init__(
+        self,
+        provider: ModelProvider,
+        workspace: Workspace,
+        tools: ToolRegistry,
+        sink: EventSink,
+        run_store: RunStore | None = None,
+        should_stop: Callable[[], bool] | None = None,
+    ) -> None:
+        super().__init__(
+            provider=provider,
+            workspace=workspace,
+            tools=tools,
+            sink=sink,
+            max_steps=2,
+            system_prompt=CHAT_SYSTEM_PROMPT,
+            run_store=run_store,
+            should_stop=should_stop,
+            require_tool_evidence=False,
+            include_repository_map=False,
         )
 
 

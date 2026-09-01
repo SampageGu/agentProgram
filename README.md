@@ -2,7 +2,7 @@
 
 一个从零实现的本地 Coding Agent，目标是复现 Claude Code / Codex 的核心工作流，并把每次修改变成可追踪、可恢复、可验证的工程过程。
 
-当前版本：`0.8.0`。M0–M5.2 已完成实现，离线测试 `39/39 OK`；真实 DeepSeek 父子 Agent 验收仍需使用者执行。
+当前版本：`0.9.0`。M0–M5.2（含 M4.2 双模式路由）已完成实现，离线测试 `46/46 OK`；真实 DeepSeek 父子 Agent 验收仍需使用者执行。
 
 ```text
 理解任务 → Explore Subagent 取证 → 父 Agent 复核 → 计划 → Patch
@@ -18,8 +18,9 @@
 - 上下文工程：大结果 artifact 化、旧上下文压缩、SQLite/JSON checkpoint 和安全 resume；
 - 可观测性：JSONL 事件、Replay、步骤/工具/测试/Token/耗时指标和故障注入；
 - ChatGPT 式本地 Web：多轮会话、SSE 流式回答、工具/Subagent 卡片、计划/测试/Diff 抽屉；
+- 意图路由与双模式：自动区分普通对话、只读仓库问答和编码任务，也可手动选择“对话/编码”；
 - 安全策略：workspace 边界、敏感路径保护、无 Shell 命令白名单和 15 个版本化安全探针；
-- 可复现评测：5 个只读任务、3 个 Coding 任务、20 个隐藏测试任务和 39 个离线测试。
+- 可复现评测：5 个只读任务、3 个 Coding 任务、20 个隐藏测试任务和 46 个离线测试。
 
 ## 架构
 
@@ -79,7 +80,7 @@ Windows：
 python -m unittest discover -s tests -v
 ```
 
-正确基线是 `Ran 39 tests` 和 `OK`，测试使用 Fake Provider，不访问网络。
+正确基线是 `Ran 46 tests` 和 `OK`，测试使用 Fake Provider，不访问网络。
 
 ### 3. 启动一次性 Coding Demo
 
@@ -103,6 +104,12 @@ Demo 会复制一个带除零 Bug 的小仓库，然后让 Agent 探索、委派
 
 第一轮完成后可在同一会话继续追问。每条消息创建独立 Run，但复用同一 workspace；刷新或服务重启后，会话从 SQLite 和 Trace 恢复。
 
+输入框上方可选三种模式：
+
+- `自动`：问候和闲聊零工具回复；仓库问题只开放 list/search/read；明确修改请求才进入完整 Coding Agent；
+- `对话`：强制零工具对话，适合讨论和澄清需求；
+- `编码`：强制完整 Coding Agent，可计划、委派 Subagent、修改并测试代码。
+
 普通 `.\start.cmd web` 会直接把项目根目录作为 workspace，第一次修改实验请使用 `webdemo`。
 
 ## 常用命令
@@ -120,7 +127,7 @@ Demo 会复制一个带除零 Bug 的小仓库，然后让 Agent 探索、委派
 | `.\start.cmd resume <run_id>` | 恢复 Coding Run           | 是                         |
 | `.\start.cmd replay <run_id>` | 回放事件与指标            | 否                         |
 | `.\start.cmd security`        | 运行 15 个安全探针        | 否                         |
-| `.\start.cmd test`            | 运行 39 个离线测试        | 否                         |
+| `.\start.cmd test`            | 运行 46 个离线测试        | 否                         |
 | `.\start.cmd eval3 1`         | 运行一题 M3 评测          | 是                         |
 | `.\start.cmd eval3 20`        | 运行完整 M3 评测          | 是                         |
 
@@ -208,6 +215,7 @@ src/mini_code/
 ├─ context.py        # 上下文压缩与 artifact
 ├─ persistence.py    # Run checkpoint 与 SQLite
 ├─ conversations.py  # Web Conversation → Run 关联
+├─ routing.py        # M4.2 意图路由与对话/编码模式
 ├─ replay.py         # Trace Replay 与指标
 ├─ security.py       # 安全探针
 ├─ web.py            # localhost REST/SSE 服务
@@ -219,7 +227,7 @@ src/mini_code/
 
 ## 当前状态与后续计划
 
-已完成：M4.1 对话式 Web、M5.1 独立 Explore child、M5.2 Parent → Child 委派与证据复核门禁。
+已完成：M4.2 意图路由与对话/编码双模式、M5.1 独立 Explore child、M5.2 Parent → Child 委派与证据复核门禁。
 
 待人工验收：使用真实 DeepSeek 完成一次 Parent → Child → Parent 复核 → Patch → 测试 → Diff → finish 闭环。
 

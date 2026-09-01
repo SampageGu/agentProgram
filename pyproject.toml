@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mini-code-agent"
-version = "0.8.0"
+version = "0.9.0"
 description = "A resumable coding agent with safe patch loops and compacted context."
 readme = "README.md"
 requires-python = ">=3.11"

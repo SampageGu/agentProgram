@@ -21,6 +21,8 @@ class ConversationRun:
     sequence: int
     user_message: str
     created_at: str
+    requested_mode: str = "code"
+    intent: str = "code"
 
 
 @dataclass(frozen=True)
@@ -56,11 +58,23 @@ class ConversationStore:
             )
         return Conversation(conversation_id, title, now, now, [])
 
-    def add_run(self, conversation_id: str, run_id: str, user_message: str) -> None:
+    def add_run(
+        self,
+        conversation_id: str,
+        run_id: str,
+        user_message: str,
+        *,
+        requested_mode: str = "code",
+        intent: str = "code",
+    ) -> None:
         _validate_conversation_id(conversation_id)
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", run_id):
             raise PersistenceError(f"Invalid run id: {run_id!r}")
         message = _validate_message(user_message)
+        if requested_mode not in {"auto", "chat", "code"}:
+            raise PersistenceError(f"Invalid requested mode: {requested_mode!r}")
+        if intent not in {"chat", "read", "code"}:
+            raise PersistenceError(f"Invalid intent: {intent!r}")
         now = _now()
         with self._connect() as connection:
             exists = connection.execute(
@@ -79,10 +93,19 @@ class ConversationStore:
             connection.execute(
                 """
                 INSERT INTO conversation_runs(
-                    conversation_id, run_id, sequence, user_message, created_at
-                ) VALUES (?, ?, ?, ?, ?)
+                    conversation_id, run_id, sequence, user_message, created_at,
+                    requested_mode, intent
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (conversation_id, run_id, sequence, message, now),
+                (
+                    conversation_id,
+                    run_id,
+                    sequence,
+                    message,
+                    now,
+                    requested_mode,
+                    intent,
+                ),
             )
             connection.execute(
                 "UPDATE conversations SET updated_at = ? WHERE conversation_id = ?",
@@ -117,7 +140,7 @@ class ConversationStore:
                 raise PersistenceError(f"Conversation not found: {conversation_id}")
             runs = connection.execute(
                 """
-                SELECT run_id, sequence, user_message, created_at
+                SELECT run_id, sequence, user_message, created_at, requested_mode, intent
                 FROM conversation_runs
                 WHERE conversation_id = ? ORDER BY sequence ASC
                 """,
@@ -177,12 +200,28 @@ class ConversationStore:
                     sequence INTEGER NOT NULL,
                     user_message TEXT NOT NULL,
                     created_at TEXT NOT NULL,
+                    requested_mode TEXT NOT NULL DEFAULT 'code',
+                    intent TEXT NOT NULL DEFAULT 'code',
                     PRIMARY KEY(conversation_id, sequence),
                     FOREIGN KEY(conversation_id)
                         REFERENCES conversations(conversation_id) ON DELETE CASCADE
                 );
                 """
             )
+            columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(conversation_runs)").fetchall()
+            }
+            if "requested_mode" not in columns:
+                connection.execute(
+                    "ALTER TABLE conversation_runs "
+                    "ADD COLUMN requested_mode TEXT NOT NULL DEFAULT 'code'"
+                )
+            if "intent" not in columns:
+                connection.execute(
+                    "ALTER TABLE conversation_runs "
+                    "ADD COLUMN intent TEXT NOT NULL DEFAULT 'code'"
+                )
             connection.execute("PRAGMA optimize")
 
 
