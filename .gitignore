@@ -1,6 +1,7 @@
 .env
 .venv/
 .mini-code/
+.private/
 __pycache__/
 *.py[cod]
 *.egg-info/
