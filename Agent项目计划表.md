@@ -522,6 +522,14 @@ mini-code run "修复除数为零时的异常，并补充测试"
 - 取消后保存 checkpoint，可回到 CLI resume；
 - 默认只监听 `127.0.0.1`，不提供远程部署或多用户能力。
 
+### M4.1：ChatGPT 式多轮交互（已实现，待人工验收）
+
+- SQLite 保存 Conversation 与多个 Run 的关联；
+- 左侧会话、中央消息流、底部输入框、右侧计划/测试/Diff 抽屉；
+- 同一会话可连续发任务，每轮创建独立 Run 并复用当前 workspace；
+- 流式文本与工具调用交错展示，Explore child 使用独立可展开卡片；
+- 刷新后恢复会话、消息、事件与当前运行状态。
+
 ### M5：Explore Subagent 与受控多 Agent 协作
 
 - 主 Agent 通过显式委派协议创建只读 Explore Subagent；

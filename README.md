@@ -1,110 +1,61 @@
 # MiniCode Agent
 
-> 当前进度与下一步：[PROJECT_STATUS.md](PROJECT_STATUS.md)
+一个从零实现的本地 Coding Agent，目标是复现 Claude Code / Codex 的核心工作流，并把每次修改变成可追踪、可恢复、可验证的工程过程。
 
-MiniCode 是一个从零实现的 Coding Agent。当前 **M5.2 主 Agent → Explore Subagent 委派闭环已完成离线实现，等待真实 DeepSeek 人工验收**；它能够探索仓库、委派只读 child、复核证据、应用 Patch、运行测试，通过 checkpoint 恢复，并用 CLI 或 Web 查看实时运行。
+当前版本：`0.8.0`。M0–M5.2 已完成实现，离线测试 `39/39 OK`；真实 DeepSeek 父子 Agent 验收仍需使用者执行。
 
 ```text
-编程任务 → 仓库探索 → 计划 → Patch → 测试 → 失败修复 → Diff → 完成协议
+理解任务 → Explore Subagent 取证 → 父 Agent 复核 → 计划 → Patch
+        → 测试 → 失败修复 → Diff → 完成协议 → Checkpoint/Replay
 ```
 
-## 当前已实现
+## 项目亮点
 
-- DeepSeek `deepseek-v4-flash` OpenAI-compatible 流式接口；
-- `list_files`、`search_code`、`read_file` 三个只读工具；
-- 流式文本、工具开始/结束、运行状态等结构化事件；
-- 工具调用 chunk 的增量组装；
-- 工作区路径边界，禁止访问工作区外、`.env`、`.git`、`.mini-code`；
-- 最大 Agent step 预算；
-- JSONL 完整 Trace；
-- 进程内多轮上下文，可追问“刚才的文件”和“上一个结果”；
-- `/help`、`/history`、`/clear`、`/exit` 会话命令；
-- 终端流式输出规范化，不再直接显示 `\*\*` 一类转义标记；
-- `update_plan` 多步骤计划；
-- `apply_patch` unified diff 修改，拒绝越界、密钥文件、删除和重命名；
-- `run_command` 无 Shell 的命令白名单；
-- `run_tests` 支持 unittest/pytest，保存退出码和输出；
-- `git_diff` 同时返回 Git 状态和本次 Agent 修改的 session diff；
-- `finish_task` 验证优先完成协议：最新 Patch 后测试未通过或未查看 Diff时拒绝完成；
-- SQLite 最新运行状态与逐步 JSON checkpoint；
-- 大工具输出保存为 artifact，模型只接收包含引用的摘要；
-- 超过上下文阈值后压缩旧工具结果和 Patch 参数，同时保留任务、计划、错误和 Diff 摘要；
-- `resume` 从最近有效步骤继续，恢复计划、消息、修改基线和验证状态；
-- 恢复前校验工作区指纹，外部修改时拒绝继续；
-- `status` 查看持久化步骤、计划和修改文件；
-- Trace Replay 与运行耗时、步骤、工具、测试、改动文件和 Token 指标；
-- 15 个版本化安全策略探针与 JSON 审计报告；
-- 单次模型故障注入，以及从 checkpoint 恢复的验证；
-- 20 个、8 类 M3 Coding 任务，使用 Agent 不可见的隐藏测试评分；
-- M4 本地 REST/SSE 控制台、历史 Run、计划/验证/指标面板与协作式取消；
-- 独立只读 Explore Subagent，拥有自己的 Prompt、上下文、预算、child Run、Trace 和结构化证据报告；
-- `delegate_explore` 父子委派、两次上限、失败降级和 Patch 前证据复核门禁；
-- 37 个离线测试、5 个 M0 问答、3 个 M1 和 20 个 M3 Coding 评测任务。
+- 自主 Agent Loop：支持 DeepSeek OpenAI-compatible 流式响应和增量 tool call 组装；
+- 可验证编码闭环：计划、unified diff Patch、受限命令、测试、Diff 与 `finish_task` 完成门禁；
+- Explore Subagent：独立 Prompt、上下文、Provider、预算、Run 和 Trace，只能读取代码；
+- 父子证据门禁：child 返回结构化 `path:line` 证据，父 Agent 必须重新读取后才能 Patch；
+- 上下文工程：大结果 artifact 化、旧上下文压缩、SQLite/JSON checkpoint 和安全 resume；
+- 可观测性：JSONL 事件、Replay、步骤/工具/测试/Token/耗时指标和故障注入；
+- ChatGPT 式本地 Web：多轮会话、SSE 流式回答、工具/Subagent 卡片、计划/测试/Diff 抽屉；
+- 安全策略：workspace 边界、敏感路径保护、无 Shell 命令白名单和 15 个版本化安全探针；
+- 可复现评测：5 个只读任务、3 个 Coding 任务、20 个隐藏测试任务和 39 个离线测试。
 
-M3 **仍未实现**操作系统级进程沙箱和人工审批队列；仓库测试代码仍以当前用户权限运行。边界见 [威胁模型](docs/threat-model.md)，架构和协议见 [架构](docs/architecture.md) 与 [事件协议](docs/event-protocol.md)。
+## 架构
 
-## 环境
+```mermaid
+flowchart LR
+    U[CLI / Web] --> P[Parent CodingAgent]
+    P --> E[Explore Subagent]
+    E --> R[只读证据报告]
+    R --> P
+    P --> T[计划 / Patch / 测试 / Diff]
+    P --> C[Context Manager]
+    P --> V[JSONL Trace]
+    C --> S[(SQLite + Checkpoint + Artifact)]
+    V --> W[Replay / Web SSE]
+```
 
-- Python 3.11+；
-- Windows、macOS 或 Linux；
-- DeepSeek API Key（离线自动测试不需要）；
-- 推荐安装 `rg`（ripgrep）；没有时会使用较慢的 Python 搜索回退。
+父 Agent 最多委派两个 Explore child。child 不具备写工具且不能递归委派；child 失败时，parent 可以使用自己的只读工具降级继续。
 
-## 启动（零依赖）
+## 快速开始
+
+### 1. 环境
+
+- Python 3.11+
+- Windows、macOS 或 Linux
+- DeepSeek API Key；离线测试不需要 Key
+- 可选：`rg`，缺失时自动使用 Python 搜索回退
+
+项目仅使用 Python 标准库，无需安装运行时依赖：
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe run_mini_code.py --help
-```
-
-macOS/Linux 将第二条替换为：
-
-```bash
-./.venv/bin/python run_mini_code.py --help
-```
-
-### Windows 推荐：简易启动脚本
-
-日常使用不需要记住完整 Python 命令：
-
-```powershell
-.\start.cmd
-```
-
-脚本默认进入连续对话。也可以选择其他命令：
-
-```powershell
-.\start.cmd chat
-.\start.cmd run "修复 calculator.py 的除零 Bug，并运行测试"
-.\start.cmd resume <run_id>
-.\start.cmd status <run_id>
-.\start.cmd replay <run_id>
-.\start.cmd security
-.\start.cmd explore "定位配置加载流程并给出代码证据"
-.\start.cmd webdemo
-.\start.cmd demo
-.\start.cmd demo2
-.\start.cmd ask "这个项目的入口在哪里？请引用代码行"
-.\start.cmd test
-.\start.cmd eval
-.\start.cmd eval1
-.\start.cmd eval3 20
-.\start.cmd trace <run_id>
-.\start.cmd help
-```
-
-`start.cmd` 只为本次启动绕过 PowerShell 脚本执行策略，不会修改系统设置。它会自动使用 `.venv\Scripts\python.exe`、项目根目录和根目录 `.env`。
-
-## 配置 DeepSeek
-
-在项目根目录复制配置模板：
-
-```powershell
 Copy-Item .env.example .env
 notepad .env
 ```
 
-填写：
+在 `.env` 填写：
 
 ```dotenv
 DEEPSEEK_API_KEY=你的真实Key
@@ -112,83 +63,94 @@ MINICODE_BASE_URL=https://api.deepseek.com
 MINICODE_MODEL=deepseek-v4-flash
 ```
 
-Key 只放在 `.env`；该文件已加入 `.gitignore`，Agent 工具也禁止读取它。
+`.env` 已被 Git 忽略，Agent 工具也禁止读取它。
 
-## 运行
+### 2. 运行离线测试
 
-Windows 推荐直接使用：
-
-```powershell
-.\start.cmd
-```
-
-进入后可以连续追问：
-
-```text
-MiniCode> M0 的三个只读工具分别在哪里实现？
-MiniCode> 刚才提到的搜索工具如何限制结果数量？
-MiniCode> /history
-MiniCode> /clear
-MiniCode> /exit
-```
-
-只读 `chat` 的上下文仍只在当前进程中存在；M2 的持久化与压缩目前只接入 Coding `run`，聊天持久化留作后续扩展。
-
-### M1 修改任务
-
-对当前项目执行 Coding Agent：
+Windows：
 
 ```powershell
-.\start.cmd run "修复指定 Bug，并补充或更新测试"
+.\start.cmd test
 ```
 
-第一次体验建议运行一次性 Demo。它会把故障样例复制到 `.mini-code/demos/` 后再修改，不会改动模板：
+跨平台：
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+正确基线是 `Ran 39 tests` 和 `OK`，测试使用 Fake Provider，不访问网络。
+
+### 3. 启动一次性 Coding Demo
 
 ```powershell
 .\start.cmd demo
 ```
 
-分析其他 Git 仓库时使用底层命令：
+Demo 会复制一个带除零 Bug 的小仓库，然后让 Agent 探索、委派、修改和测试，不会修改样例模板。
+
+### 4. 启动 ChatGPT 式 Web
+
+```powershell
+.\start.cmd webdemo
+```
+
+打开 `http://127.0.0.1:8765`。建议先输入：
+
+```text
+修复 calculator.py 的除零问题，补充测试并检查 Diff。
+```
+
+第一轮完成后可在同一会话继续追问。每条消息创建独立 Run，但复用同一 workspace；刷新或服务重启后，会话从 SQLite 和 Trace 恢复。
+
+普通 `.\start.cmd web` 会直接把项目根目录作为 workspace，第一次修改实验请使用 `webdemo`。
+
+## 常用命令
+
+| 命令                            | 用途                      | 是否调用模型               |
+| ------------------------------- | ------------------------- | -------------------------- |
+| `.\start.cmd`                 | 终端多轮只读对话          | 是                         |
+| `.\start.cmd ask "问题"`      | 单次仓库分析              | 是                         |
+| `.\start.cmd run "任务"`      | 对当前项目执行 Coding Run | 是                         |
+| `.\start.cmd demo`            | 一次性 M1/M5.2 修复 Demo  | 是                         |
+| `.\start.cmd demo2`           | 创建可 resume 的 M2 Demo  | 是                         |
+| `.\start.cmd explore "问题"`  | 独立 Explore Subagent     | 是                         |
+| `.\start.cmd webdemo`         | 一次性 workspace Web      | 启动不调用，提交任务时调用 |
+| `.\start.cmd status <run_id>` | 查看 checkpoint 状态      | 否                         |
+| `.\start.cmd resume <run_id>` | 恢复 Coding Run           | 是                         |
+| `.\start.cmd replay <run_id>` | 回放事件与指标            | 否                         |
+| `.\start.cmd security`        | 运行 15 个安全探针        | 否                         |
+| `.\start.cmd test`            | 运行 39 个离线测试        | 否                         |
+| `.\start.cmd eval3 1`         | 运行一题 M3 评测          | 是                         |
+| `.\start.cmd eval3 20`        | 运行完整 M3 评测          | 是                         |
+
+完整命令：
+
+```powershell
+.\start.cmd help
+```
+
+## 在其他仓库中使用
 
 ```powershell
 .\.venv\Scripts\python.exe run_mini_code.py run `
-  "修复除数为零时的异常并运行测试" `
+  "修复指定 Bug，补充测试并检查 Diff" `
   --workspace D:\path\to\repo `
   --env-file D:\000Study\agentProgram\.env
 ```
 
-M1 的三题真实模型评测：
+只读分析：
 
 ```powershell
-.\start.cmd eval1
+.\.venv\Scripts\python.exe run_mini_code.py ask `
+  "定位程序入口并引用代码行" `
+  --workspace D:\path\to\repo `
+  --env-file D:\000Study\agentProgram\.env
 ```
 
-评测使用不可由 Agent 访问的 grader 测试副本，报告保存在 `.mini-code/evals/m1-*/report.json`。
+只在可信仓库中运行 Coding Agent，因为仓库测试代码仍以当前操作系统用户权限执行。
 
-### M2 checkpoint 与恢复
-
-普通 `run` 会在初始状态、每个工具步骤、上下文压缩和结束状态保存 checkpoint。若运行被中断：
-
-```powershell
-.\start.cmd status <run_id>
-.\start.cmd resume <run_id>
-```
-
-第一次验收建议使用可恢复 Demo，它会降低上下文阈值并在第 6 步按预算暂停：
-
-```powershell
-.\start.cmd demo2
-```
-
-记下输出的 Demo workspace 和 Run ID，然后执行：
-
-```powershell
-.\start.cmd status <run_id> "<Demo workspace>"
-.\start.cmd resume <run_id> "<Demo workspace>"
-.\start.cmd trace <run_id> "<Demo workspace>"
-```
-
-持久化目录：
+## Checkpoint 与运行产物
 
 ```text
 .mini-code/
@@ -196,113 +158,69 @@ M1 的三题真实模型评测：
 └─ runs/<run_id>/
    ├─ events.jsonl
    ├─ checkpoints/*.json
-   └─ artifacts/*.txt
+   └─ artifacts/*
 ```
 
-`MINICODE_MAX_CONTEXT_CHARS` 和 `MINICODE_ARTIFACT_THRESHOLD` 可调整压缩与 artifact 阈值。恢复时若源码与最新 checkpoint 的工作区指纹不同，Agent 会停止并报告冲突，不会在过期上下文上继续 Patch。
-
-### M3 Replay、安全审计与完整评测
+常用操作：
 
 ```powershell
-.\start.cmd replay <run_id> "<运行所用 workspace>"
-.\start.cmd security
-.\start.cmd eval3 20
+.\start.cmd status <run_id> "<workspace>"
+.\start.cmd resume <run_id> "<workspace>"
+.\start.cmd replay <run_id> "<workspace>"
 ```
 
-`security` 和 `test` 完全离线；`eval3` 会真实调用 DeepSeek 20 题，消耗 Token，建议先运行 `.\start.cmd eval3 1`。报告位置和指标定义见 [M3 评测说明](docs/evaluation.md)。如需成本估算，在 `.env` 按供应商当前价格填写 `MINICODE_INPUT_COST_PER_MILLION` 与 `MINICODE_OUTPUT_COST_PER_MILLION`；报告会保存该价格快照。
+恢复前会校验 workspace 指纹；外部修改后拒绝在过期 checkpoint 上继续 Patch。
 
-### M4 本地 Web 控制台
-
-第一次请使用隔离 Demo：
+## 评测与验收
 
 ```powershell
-.\start.cmd webdemo
+.\start.cmd eval       # 5 个 M0 只读任务
+.\start.cmd eval1      # 3 个 M1 Coding 任务
+.\start.cmd eval3 1    # 先验证一题
+.\start.cmd eval3 20   # 完整 20 题隐藏测试评测
 ```
 
-浏览器打开 `http://127.0.0.1:8765`。普通 `.\start.cmd web` 会把项目根目录作为目标 workspace，不建议拿它做修改型试验。完整通过标准见 [M1–M4 验收指南](docs/M1-M4验收指南.md)。
+评测报告保存在 `.mini-code/evals/`。M3 报告包含成功率、回归率、无关修改率、步骤、P50/P95、Token 和成本字段。
 
-### M5.1 Explore Subagent
+- [M0–M5.2 统一验收指南](docs/验收指南.md)
+- [评测指标说明](docs/evaluation.md)
+- [当前项目状态](PROJECT_STATUS.md)
 
-```powershell
-.\start.cmd explore "定位 M4 Web 服务入口和安全边界，请返回路径与行号"
-```
+## 安全边界
 
-M5.1 的 child 仍可独立运行；M5.2 已让主 CodingAgent 通过 `delegate_explore` 自动创建它。详见 [M5 验收指南](docs/M5验收指南.md)。
+当前已经实现策略层限制，但不是操作系统沙箱：
 
-M5.2 已在普通 `run`、`demo`、`resume` 和 Web Coding Run 中默认启用。单 Agent 对照可使用底层参数 `run --no-subagents`。父子 Replay 聚合与 Web Subagent 卡片属于 M5.3。
+- Web 只允许监听 `127.0.0.1`，没有登录、多租户或公网部署；
+- 禁止读取或修改 `.env`、`.git`、`.mini-code` 和 workspace 外路径；
+- `run_command` 不经过 Shell，只允许受控命令；
+- 取消是协作式取消，不能中途强杀正在进行的模型请求或测试子进程；
+- Trace 可能包含私有源码片段，只应保存在本机；
+- `15/15 blocked` 仅表示当前安全探针全部通过，不代表绝对安全。
 
-以下是等价的底层完整命令，便于理解和跨平台使用。
-
-分析 MiniCode 自己：
-
-```powershell
-.\.venv\Scripts\python.exe run_mini_code.py ask "M0 有哪些只读工具？请引用代码行" --workspace .
-```
-
-分析其他仓库：
-
-```powershell
-.\.venv\Scripts\python.exe run_mini_code.py ask "这个项目的程序入口在哪里？" --workspace D:\path\to\repo --env-file D:\000Study\agentProgram\.env
-```
-
-注意：默认 `.env` 相对于当前终端目录，而不是 `--workspace`。
-
-## 查看 Trace
-
-运行结束会打印 `Run ID`：
-
-```powershell
-.\.venv\Scripts\python.exe run_mini_code.py trace <run_id> --workspace .
-```
-
-原始事件位于：
-
-```text
-.mini-code/runs/<run_id>/events.jsonl
-```
-
-## 自动测试
-
-```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
-```
-
-自动测试使用 Fake Provider，不访问网络、不消耗 Token。
-
-## M0 真实模型评测
-
-```powershell
-.\.venv\Scripts\python.exe run_mini_code.py eval-m0 --workspace .
-```
-
-它会让 DeepSeek 完成 5 个仓库分析任务，并将结果写入：
-
-```text
-.mini-code/evals/<suite_id>/report.json
-```
-
-完整人工验收步骤和通过标准见 [docs/验收手册.md](docs/验收手册.md)。
+详细设计见 [威胁模型](docs/threat-model.md)、[架构说明](docs/architecture.md) 和 [事件协议](docs/event-protocol.md)。
 
 ## 项目结构
 
 ```text
 src/mini_code/
-├─ agent.py          # Agent Loop 与流式工具调用组装
-├─ cli.py            # run / demo / chat / ask / trace / eval
-├─ config.py         # .env 与 DeepSeek 配置
-├─ events.py         # 事件协议与 JSONL Trace
-├─ provider.py       # DeepSeek 流式 API 客户端
-├─ workspace.py      # 路径边界与仓库地图
-├─ eval_m1.py        # 三题真实模型 Coding 评测
-├─ eval_m3.py        # 20 题隐藏测试评测与报告
-├─ context.py        # M2 上下文压缩和 artifact 摘要
-├─ persistence.py    # SQLite、JSON checkpoint 与冲突检测
-├─ replay.py         # M3 Trace 重放和运行指标
-├─ security.py       # M3 版本化安全探针
-├─ web.py            # M4 本地 REST/SSE 服务与 Run 管理
-├─ web_static/       # M4 零依赖控制台页面
-├─ subagents.py      # M5 Explore Subagent 与结构化报告协议
+├─ agent.py          # Agent Loop、流式输出与工具调用
+├─ subagents.py      # Explore Subagent 与结构化报告
+├─ context.py        # 上下文压缩与 artifact
+├─ persistence.py    # Run checkpoint 与 SQLite
+├─ conversations.py  # Web Conversation → Run 关联
+├─ replay.py         # Trace Replay 与指标
+├─ security.py       # 安全探针
+├─ web.py            # localhost REST/SSE 服务
+├─ web_static/       # 零依赖对话页面
 └─ tools/
-   ├─ readonly.py    # M0 三个只读工具
-   └─ coding.py      # M1 Patch、进程、计划和完成协议
+   ├─ readonly.py    # list/search/read
+   └─ coding.py      # plan/patch/command/test/diff/finish/delegate
 ```
+
+## 当前状态与后续计划
+
+已完成：M4.1 对话式 Web、M5.1 独立 Explore child、M5.2 Parent → Child 委派与证据复核门禁。
+
+待人工验收：使用真实 DeepSeek 完成一次 Parent → Child → Parent 复核 → Patch → 测试 → Diff → finish 闭环。
+
+下一阶段 M5.3：父子 Replay 树、父子 Token/耗时聚合与多 Agent 对照评测。详细记录见 [PROJECT_STATUS.md](PROJECT_STATUS.md)。

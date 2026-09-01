@@ -54,7 +54,7 @@ class DeepSeekProvider:
                 "Authorization": f"Bearer {self.settings.api_key}",
                 "Content-Type": "application/json",
                 "Accept": "text/event-stream",
-            "User-Agent": "mini-code-agent/0.7.0",
+            "User-Agent": "mini-code-agent/0.8.0",
             },
             method="POST",
         )

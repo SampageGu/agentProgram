@@ -18,6 +18,7 @@ from urllib.parse import parse_qs, urlparse
 
 from mini_code.agent import CodingAgent
 from mini_code.config import Settings
+from mini_code.conversations import ConversationStore
 from mini_code.context import ContextManager
 from mini_code.events import EventSink
 from mini_code.persistence import PersistenceError, RunSnapshot, RunStore
@@ -44,11 +45,18 @@ class WebRunManager:
         self.settings = settings
         self.provider_factory = provider_factory
         self.store = RunStore(workspace)
+        self.conversations = ConversationStore(workspace)
         self._jobs: dict[str, tuple[threading.Thread, threading.Event]] = {}
         self._job_errors: dict[str, str] = {}
         self._lock = threading.Lock()
 
-    def start_run(self, task: str) -> str:
+    def start_run(
+        self,
+        task: str,
+        *,
+        conversation_id: str | None = None,
+        user_message: str | None = None,
+    ) -> str:
         task = task.strip()
         if not task:
             raise WebError("task must not be empty")
@@ -65,9 +73,77 @@ class WebRunManager:
         with self._lock:
             if any(existing.is_alive() for existing, _ in self._jobs.values()):
                 raise WebError("another run is active in this workspace")
+            if conversation_id is not None:
+                self.conversations.add_run(conversation_id, run_id, user_message or task)
             self._jobs[run_id] = (thread, cancel_event)
         thread.start()
         return run_id
+
+    def start_conversation(self, message: str) -> dict[str, str]:
+        conversation = self.conversations.create(message)
+        try:
+            run_id = self.start_run(
+                message,
+                conversation_id=conversation.conversation_id,
+                user_message=message,
+            )
+        except Exception:
+            self.conversations.delete_if_empty(conversation.conversation_id)
+            raise
+        return {"conversation_id": conversation.conversation_id, "run_id": run_id}
+
+    def continue_conversation(self, conversation_id: str, message: str) -> dict[str, str]:
+        conversation = self.conversations.get(conversation_id)
+        prior = conversation.runs[-6:]
+        history = "\n".join(
+            f"{item.sequence}. {item.user_message[:600]}" for item in prior
+        )
+        effective_task = (
+            "This is a follow-up in an existing coding conversation. The workspace contains "
+            "the authoritative result of earlier turns. Inspect it before making claims.\n\n"
+            f"Earlier user requests:\n{history}\n\nCurrent user request:\n{message.strip()}"
+        )
+        run_id = self.start_run(
+            effective_task,
+            conversation_id=conversation_id,
+            user_message=message,
+        )
+        return {"conversation_id": conversation_id, "run_id": run_id}
+
+    def list_conversations(self) -> list[dict[str, Any]]:
+        payloads: list[dict[str, Any]] = []
+        for conversation in self.conversations.list():
+            payload = self.conversations.to_dict(conversation)
+            last_run = conversation.runs[-1].run_id if conversation.runs else None
+            payload["last_run_id"] = last_run
+            payload["active"] = bool(last_run and self.is_active(last_run))
+            if last_run:
+                try:
+                    payload["status"] = self.store.load(last_run).status
+                except PersistenceError:
+                    payload["status"] = "starting" if self.is_active(last_run) else "unknown"
+            else:
+                payload["status"] = "empty"
+            payloads.append(payload)
+        return payloads
+
+    def get_conversation(self, conversation_id: str) -> dict[str, Any]:
+        conversation = self.conversations.get(conversation_id)
+        payload = self.conversations.to_dict(conversation)
+        turns: list[dict[str, Any]] = []
+        for link in conversation.runs:
+            try:
+                run = self.get_run(link.run_id)
+            except PersistenceError:
+                run = {
+                    "run_id": link.run_id,
+                    "status": "starting" if self.is_active(link.run_id) else "unknown",
+                    "active": self.is_active(link.run_id),
+                }
+            turns.append({**asdict(link), "run": run})
+        payload["turns"] = turns
+        payload.pop("runs", None)
+        return payload
 
     def cancel_run(self, run_id: str) -> bool:
         with self._lock:
@@ -159,6 +235,8 @@ class WebRunManager:
             "plan": state.plan,
             "checks": state.checks,
             "completion_report": state.completion_report,
+            "delegations": state.delegations,
+            "verified_evidence_files": sorted(state.verified_evidence_files),
             "diff": state.last_diff[:100_000],
             "active": self.is_active(snapshot.run_id),
         }
@@ -186,10 +264,25 @@ class MiniCodeRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         if parsed.path == "/api/health":
-            self._json({"ok": True, "service": "mini-code-m4", "version": 1})
+            self._json({"ok": True, "service": "mini-code-m4", "version": 2})
             return
         if parsed.path == "/api/runs":
             self._api_call(lambda: self._json({"runs": self.server.manager.list_runs()}))
+            return
+        if parsed.path == "/api/conversations":
+            self._api_call(
+                lambda: self._json({"conversations": self.server.manager.list_conversations()})
+            )
+            return
+        conversation_match = re.fullmatch(
+            r"/api/conversations/([A-Za-z0-9_-]{1,80})", parsed.path
+        )
+        if conversation_match:
+            self._api_call(
+                lambda: self._json(
+                    self.server.manager.get_conversation(conversation_match.group(1))
+                )
+            )
             return
         match = re.fullmatch(r"/api/runs/([A-Za-z0-9_-]{1,80})(?:/(events|stream))?", parsed.path)
         if match:
@@ -209,6 +302,17 @@ class MiniCodeRequestHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/runs":
             self._api_call(self._create_run)
             return
+        if parsed.path == "/api/conversations":
+            self._api_call(self._create_conversation)
+            return
+        conversation_match = re.fullmatch(
+            r"/api/conversations/([A-Za-z0-9_-]{1,80})/messages", parsed.path
+        )
+        if conversation_match:
+            self._api_call(
+                lambda: self._continue_conversation(conversation_match.group(1))
+            )
+            return
         match = re.fullmatch(r"/api/runs/([A-Za-z0-9_-]{1,80})/cancel", parsed.path)
         if match:
             self._api_call(lambda: self._cancel_run(match.group(1)))
@@ -222,6 +326,22 @@ class MiniCodeRequestHandler(BaseHTTPRequestHandler):
             raise WebError("task must be a string")
         run_id = self.server.manager.start_run(task)
         self._json({"run_id": run_id, "status": "starting"}, HTTPStatus.ACCEPTED)
+
+    def _create_conversation(self) -> None:
+        body = self._read_json()
+        message = body.get("message")
+        if not isinstance(message, str):
+            raise WebError("message must be a string")
+        result = self.server.manager.start_conversation(message)
+        self._json({**result, "status": "starting"}, HTTPStatus.ACCEPTED)
+
+    def _continue_conversation(self, conversation_id: str) -> None:
+        body = self._read_json()
+        message = body.get("message")
+        if not isinstance(message, str):
+            raise WebError("message must be a string")
+        result = self.server.manager.continue_conversation(conversation_id, message)
+        self._json({**result, "status": "starting"}, HTTPStatus.ACCEPTED)
 
     def _cancel_run(self, run_id: str) -> None:
         accepted = self.server.manager.cancel_run(run_id)
@@ -280,7 +400,10 @@ class MiniCodeRequestHandler(BaseHTTPRequestHandler):
             return
         content = path.read_bytes()
         self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", mimetypes.guess_type(path.name)[0] or "application/octet-stream")
+        content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        if content_type.startswith("text/") or content_type == "application/javascript":
+            content_type += "; charset=utf-8"
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(content)))
         self._security_headers()
         self.end_headers()

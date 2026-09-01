@@ -1,16 +1,1 @@
-.diff-panel,
-.timeline-panel {
-  margin-top: 14px;
-}
-
-.diff-panel pre {
-  margin: 14px 0 0;
-  max-height: 360px;
-  overflow: auto;
-  background: #08110f;
-  border-radius: 8px;
-  padding: 14px;
-  color: #c5d6d0;
-  font: 11px/1.6 var(--mono);
-  white-space: pre-wrap;
-}
+#diff{margin:0;max-height:330px;overflow:auto;border:1px solid #262b27;background:#0b0d0c;border-radius:8px;padding:11px;color:#b8c1ba;font:10px/1.6 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}

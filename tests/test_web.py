@@ -11,6 +11,7 @@ from pathlib import Path
 import _bootstrap  # noqa: F401
 
 from mini_code.agent import CodingAgent
+from mini_code.conversations import ConversationStore
 from mini_code.events import EventSink
 from mini_code.persistence import RunStore
 from mini_code.replay import calculate_metrics, load_trace
@@ -58,8 +59,50 @@ class _FakeManager:
     def is_active(self, run_id):
         return False
 
+    def list_conversations(self):
+        return [{
+            "conversation_id": "chat-test", "title": "fix", "message_count": 1,
+            "last_message": "fix", "last_run_id": "web-test", "status": "completed",
+            "active": False,
+        }]
+
+    def get_conversation(self, conversation_id):
+        if conversation_id != "chat-test":
+            raise WebError("Conversation not found")
+        return {
+            "conversation_id": conversation_id,
+            "title": "fix",
+            "message_count": 1,
+            "turns": [{
+                "run_id": "web-test", "sequence": 1, "user_message": "fix",
+                "run": self.get_run("web-test"),
+            }],
+        }
+
+    def start_conversation(self, message):
+        return {"conversation_id": "chat-test", "run_id": "web-test"}
+
+    def continue_conversation(self, conversation_id, message):
+        if conversation_id != "chat-test":
+            raise WebError("Conversation not found")
+        return {"conversation_id": conversation_id, "run_id": "web-test"}
+
 
 class M4WebTests(unittest.TestCase):
+    def test_conversation_store_persists_ordered_run_links(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Workspace(Path(temp_dir))
+            conversation = ConversationStore(workspace).create("修复登录接口的边界问题")
+            store = ConversationStore(workspace)
+            store.add_run(conversation.conversation_id, "run-one", "先定位问题")
+            store.add_run(conversation.conversation_id, "run-two", "继续补测试")
+
+            restored = store.get(conversation.conversation_id)
+            self.assertEqual(restored.title, "修复登录接口的边界问题")
+            self.assertEqual([item.sequence for item in restored.runs], [1, 2])
+            self.assertEqual(restored.runs[-1].user_message, "继续补测试")
+            self.assertEqual(store.list()[0].conversation_id, conversation.conversation_id)
+
     def test_cooperative_cancel_persists_a_resumable_terminal_state(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Workspace(Path(temp_dir))
@@ -95,7 +138,32 @@ class M4WebTests(unittest.TestCase):
             self.assertEqual(headers["X-Frame-Options"], "DENY")
             with urllib.request.urlopen(base + "/", timeout=3) as response:
                 page = response.read().decode("utf-8")
-            self.assertIn("MiniCode M4", page)
+                self.assertEqual(response.headers.get_content_charset(), "utf-8")
+            self.assertIn("今天想一起改点什么", page)
+
+            conversations, _ = _get_json(base + "/api/conversations")
+            self.assertEqual(conversations["conversations"][0]["conversation_id"], "chat-test")
+
+            request = urllib.request.Request(
+                base + "/api/conversations",
+                data=json.dumps({"message": "fix"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=3) as response:
+                created_chat = json.loads(response.read())
+                self.assertEqual(response.status, 202)
+            self.assertEqual(created_chat["conversation_id"], "chat-test")
+
+            request = urllib.request.Request(
+                base + "/api/conversations/chat-test/messages",
+                data=json.dumps({"message": "add tests"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=3) as response:
+                continued = json.loads(response.read())
+            self.assertEqual(continued["run_id"], "web-test")
 
             request = urllib.request.Request(
                 base + "/api/runs",
