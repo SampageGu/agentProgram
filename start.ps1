@@ -29,7 +29,7 @@ function Resolve-Python {
 }
 
 function Show-Help {
-    Write-Host "MiniCode M5.2 launcher"
+    Write-Host "MiniCode 0.9 launcher (M4.2 + M5.2)"
     Write-Host ""
     Write-Host "  .\start.cmd                         Start multi-turn chat"
     Write-Host "  .\start.cmd chat                    Start multi-turn chat"
@@ -39,8 +39,8 @@ function Show-Help {
     Write-Host "  .\start.cmd replay <run_id>         Replay timeline and metrics"
     Write-Host "  .\start.cmd security                Run offline security probes"
     Write-Host "  .\start.cmd explore 'question'     Run the M5.1 Explore Subagent"
-    Write-Host "  .\start.cmd web                     Start M4 at http://127.0.0.1:8765"
-    Write-Host "  .\start.cmd webdemo                 Start M4 with a disposable workspace"
+    Write-Host "  .\start.cmd web                     Start M4.2 at http://127.0.0.1:8765"
+    Write-Host "  .\start.cmd webdemo                 Start M4.2 with a disposable workspace"
     Write-Host "  .\start.cmd demo                    Run the disposable M1 demo"
     Write-Host "  .\start.cmd demo2                   Create a resumable M2 demo"
     Write-Host "  .\start.cmd ask `"your question`"   Ask directly"

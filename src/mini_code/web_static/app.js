@@ -1,7 +1,7 @@
 const $ = (id) => document.getElementById(id);
 const terminalEvents = new Set(["run_completed", "run_failed", "run_cancelled", "budget_exhausted"]);
-const eventTypes = ["run_started","repository_mapped","model_started","model_completed","text_delta","tool_started","tool_completed","plan_updated","patch_applied","verification_passed","verification_failed","completion_verified","context_compacted","checkpoint_saved","run_resumed","run_interrupted","run_cancelled","run_completed","run_failed","budget_exhausted","subagent_started","subagent_completed","subagent_delegated","subagent_result","subagent_failed"];
-const state = { conversationId: null, runId: null, conversation: null, source: null, events: new Map(), active: false };
+const eventTypes = ["intent_routed","run_started","repository_mapped","model_started","model_completed","text_delta","tool_started","tool_completed","plan_updated","patch_applied","verification_passed","verification_failed","completion_verified","context_compacted","checkpoint_saved","run_resumed","run_interrupted","run_cancelled","run_completed","run_failed","budget_exhausted","subagent_started","subagent_completed","subagent_delegated","subagent_result","subagent_failed"];
+const state = { conversationId: null, runId: null, conversation: null, source: null, events: new Map(), active: false, mode: "auto" };
 
 async function api(path, options = {}) {
   const response = await fetch(path, {headers: {"Content-Type": "application/json"}, ...options});
@@ -54,6 +54,8 @@ async function selectConversation(conversationId) {
   const last = turns.at(-1);
   state.runId = last?.run_id || null;
   state.active = Boolean(last?.run?.active);
+  state.mode = last?.requested_mode || "auto";
+  renderMode();
   $("chat-title").textContent = state.conversation.title;
   renderConversation();
   if (last?.run) renderInspector(last.run, eventsFor(last.run_id));
@@ -90,9 +92,12 @@ function renderTurn(turn, events) {
   const assistant = node("div", "assistant-message");
   assistant.append(node("div", "avatar", "M"));
   const body = node("div", "assistant-body");
+  const intent = turn.intent || "code";
+  const modeLabel = turn.requested_mode === "auto" ? `自动 → ${intentText(intent)}` : intentText(intent);
+  body.append(node("span", `intent-badge ${intent}`, modeLabel));
   const activities = renderActivities(events, turn.run?.delegations || []);
   if (activities.childElementCount) body.append(activities);
-  const text = events.filter(event => event.type === "text_delta").map(event => event.data?.content || "").join("");
+  const text = latestModelText(events);
   const active = Boolean(turn.run?.active);
   const answer = node("div", `assistant-text ${active ? "cursor" : ""}`);
   if (text) answer.textContent = text;
@@ -135,6 +140,13 @@ function renderActivities(events, delegations) {
 
 function eventsFor(runId) {
   return [...(state.events.get(runId)?.values() || [])].sort((a, b) => a.sequence - b.sequence);
+}
+
+function latestModelText(events) {
+  let latestStart = -1;
+  events.forEach((event, index) => { if (event.type === "model_started") latestStart = index; });
+  const scope = latestStart >= 0 ? events.slice(latestStart) : events;
+  return scope.filter(event => event.type === "text_delta").map(event => event.data?.content || "").join("");
 }
 
 function addEvent(runId, event) {
@@ -223,6 +235,7 @@ function setActive(active) {
   $("send-message").classList.toggle("hidden", active);
   $("stop-run").classList.toggle("hidden", !active);
   $("message-input").disabled = active;
+  document.querySelectorAll("[data-mode]").forEach(button => { button.disabled = active; });
   if (!active) $("connection").textContent = state.conversationId ? "可以继续追问" : "准备就绪";
 }
 
@@ -233,7 +246,7 @@ async function sendMessage(message) {
   setActive(true);
   try {
     const path = state.conversationId ? `/api/conversations/${state.conversationId}/messages` : "/api/conversations";
-    const result = await api(path, {method: "POST", body: JSON.stringify({message: value})});
+    const result = await api(path, {method: "POST", body: JSON.stringify({message: value, mode: state.mode})});
     state.conversationId = result.conversation_id;
     state.runId = result.run_id;
     $("message-input").value = "";
@@ -248,6 +261,8 @@ async function sendMessage(message) {
 function newChat() {
   closeStream();
   state.conversationId = null; state.runId = null; state.conversation = null; state.events.clear();
+  state.mode = "auto";
+  renderMode();
   $("chat-title").textContent = "新对话";
   $("messages").replaceChildren(welcomeView());
   $("run-label").textContent = "尚未运行";
@@ -274,6 +289,15 @@ function resizeComposer() {
 function statusText(status) {
   return ({completed:"已完成",running:"运行中",starting:"启动中",failed:"失败",cancelled:"已取消",budget_exhausted:"预算耗尽",unknown:"等待状态"})[status] || "等待中";
 }
+function intentText(intent) { return ({chat:"对话",read:"只读问答",code:"编码任务"})[intent] || "编码任务"; }
+function renderMode() {
+  document.querySelectorAll("[data-mode]").forEach(button => button.classList.toggle("active", button.dataset.mode === state.mode));
+  $("mode-note").textContent = ({
+    auto:"自动模式会先判断意图，只有明确修改请求才会更改文件。",
+    chat:"对话模式不读取仓库、不调用工具，也不会修改文件。",
+    code:"编码模式会执行探索、计划、修改、测试和 Diff 完整流程。"
+  })[state.mode];
+}
 function statusClass(status) { return status === "completed" ? "ok" : ["failed","cancelled","budget_exhausted"].includes(status) ? "bad" : ""; }
 function fallbackAnswer(status) { return status === "completed" ? "任务已完成，请在右侧查看验证证据。" : statusText(status); }
 function compact(value) { const text = typeof value === "string" ? value : JSON.stringify(value, null, 2); return text.length > 5000 ? `${text.slice(0, 5000)}\n…` : text; }
@@ -286,7 +310,9 @@ $("new-chat").onclick = newChat;
 $("inspect-toggle").onclick = () => $("app-shell").classList.toggle("inspecting");
 $("close-inspector").onclick = () => $("app-shell").classList.remove("inspecting");
 $("menu-toggle").onclick = () => $("sidebar").classList.toggle("open");
+document.querySelectorAll("[data-mode]").forEach(button => button.onclick = () => { state.mode = button.dataset.mode; renderMode(); $("message-input").focus(); });
 $("copy-diff").onclick = async () => { try { await navigator.clipboard.writeText($("diff").textContent); $("copy-diff").textContent = "已复制"; setTimeout(() => $("copy-diff").textContent = "复制", 1200); } catch { $("copy-diff").textContent = "复制失败"; } };
 
 bindPrompts();
+renderMode();
 refreshConversations().catch(error => { $("conversation-list").textContent = error.message; });

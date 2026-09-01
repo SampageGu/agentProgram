@@ -46,6 +46,7 @@ class EventSink:
             return
         self._text_renderer.flush()
         labels = {
+            "intent_routed": "路由",
             "run_started": "启动",
             "repository_mapped": "仓库",
             "model_started": "模型",

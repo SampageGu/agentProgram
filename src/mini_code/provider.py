@@ -42,11 +42,12 @@ class DeepSeekProvider:
         payload = {
             "model": self.model,
             "messages": messages,
-            "tools": tools,
-            "tool_choice": "auto",
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
         request = urllib.request.Request(
             f"{self.settings.base_url}/chat/completions",
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -54,7 +55,7 @@ class DeepSeekProvider:
                 "Authorization": f"Bearer {self.settings.api_key}",
                 "Content-Type": "application/json",
                 "Accept": "text/event-stream",
-            "User-Agent": "mini-code-agent/0.8.0",
+                "User-Agent": "mini-code-agent/0.9.0",
             },
             method="POST",
         )

@@ -39,12 +39,17 @@
       </section>
 
       <div class="composer-wrap">
+        <div class="mode-picker" id="mode-picker" role="group" aria-label="运行模式">
+          <button type="button" class="active" data-mode="auto" title="自动判断普通对话、仓库问答或编码任务">自动</button>
+          <button type="button" data-mode="chat" title="不读取仓库，不调用工具">对话</button>
+          <button type="button" data-mode="code" title="强制执行完整 Coding Agent 流程">编码</button>
+        </div>
         <form class="composer" id="composer">
           <textarea id="message-input" rows="1" maxlength="8000" placeholder="给 MiniCode 发消息…" aria-label="消息"></textarea>
           <button id="send-message" class="send" type="submit" aria-label="发送">↑</button>
           <button id="stop-run" class="stop hidden" type="button" aria-label="停止运行">■</button>
         </form>
-        <p class="composer-note"><span id="form-error" role="alert"></span>MiniCode 可能会修改文件，请查看右侧 Diff 与测试证据。</p>
+        <p class="composer-note"><span id="form-error" role="alert"></span><span id="mode-note">自动模式会先判断意图，只有明确修改请求才会更改文件。</span></p>
       </div>
     </main>
 

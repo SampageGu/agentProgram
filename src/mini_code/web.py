@@ -16,15 +16,22 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
-from mini_code.agent import CodingAgent
+from mini_code.agent import ChatAgent, CodingAgent, ReadOnlyAgent
 from mini_code.config import Settings
 from mini_code.conversations import ConversationStore
 from mini_code.context import ContextManager
-from mini_code.events import EventSink
+from mini_code.events import AgentEvent, EventSink
 from mini_code.persistence import PersistenceError, RunSnapshot, RunStore
 from mini_code.provider import DeepSeekProvider, ModelProvider
 from mini_code.replay import ReplayError, calculate_metrics, load_trace
-from mini_code.tools import CodingToolState, ExploreDelegationConfig, build_coding_registry
+from mini_code.routing import IntentRouter, RoutingDecision
+from mini_code.tools import (
+    CodingToolState,
+    ExploreDelegationConfig,
+    ToolRegistry,
+    build_coding_registry,
+    build_readonly_registry,
+)
 from mini_code.workspace import Workspace
 
 
@@ -46,6 +53,7 @@ class WebRunManager:
         self.provider_factory = provider_factory
         self.store = RunStore(workspace)
         self.conversations = ConversationStore(workspace)
+        self.router = IntentRouter()
         self._jobs: dict[str, tuple[threading.Thread, threading.Event]] = {}
         self._job_errors: dict[str, str] = {}
         self._lock = threading.Lock()
@@ -56,17 +64,22 @@ class WebRunManager:
         *,
         conversation_id: str | None = None,
         user_message: str | None = None,
+        requested_mode: str = "code",
+        intent: str = "code",
+        route_reason: str = "direct_coding_run",
     ) -> str:
         task = task.strip()
         if not task:
             raise WebError("task must not be empty")
         if len(task) > 8_000:
             raise WebError("task is too long (maximum 8000 characters)")
+        if intent not in {"chat", "read", "code"}:
+            raise WebError("intent must be chat, read, or code")
         run_id = uuid.uuid4().hex[:12]
         cancel_event = threading.Event()
         thread = threading.Thread(
             target=self._execute,
-            args=(run_id, task, cancel_event),
+            args=(run_id, task, cancel_event, intent, requested_mode, route_reason),
             name=f"mini-code-{run_id}",
             daemon=True,
         )
@@ -74,41 +87,103 @@ class WebRunManager:
             if any(existing.is_alive() for existing, _ in self._jobs.values()):
                 raise WebError("another run is active in this workspace")
             if conversation_id is not None:
-                self.conversations.add_run(conversation_id, run_id, user_message or task)
+                self.conversations.add_run(
+                    conversation_id,
+                    run_id,
+                    user_message or task,
+                    requested_mode=requested_mode,
+                    intent=intent,
+                )
             self._jobs[run_id] = (thread, cancel_event)
         thread.start()
         return run_id
 
-    def start_conversation(self, message: str) -> dict[str, str]:
+    def start_conversation(self, message: str, mode: str = "auto") -> dict[str, str]:
+        decision = self.router.route(message, mode)
         conversation = self.conversations.create(message)
         try:
             run_id = self.start_run(
                 message,
                 conversation_id=conversation.conversation_id,
                 user_message=message,
+                requested_mode=decision.requested_mode,
+                intent=decision.intent,
+                route_reason=decision.reason,
             )
         except Exception:
             self.conversations.delete_if_empty(conversation.conversation_id)
             raise
-        return {"conversation_id": conversation.conversation_id, "run_id": run_id}
+        return {
+            "conversation_id": conversation.conversation_id,
+            "run_id": run_id,
+            "intent": decision.intent,
+            "requested_mode": decision.requested_mode,
+            "route_reason": decision.reason,
+        }
 
-    def continue_conversation(self, conversation_id: str, message: str) -> dict[str, str]:
+    def continue_conversation(
+        self, conversation_id: str, message: str, mode: str = "auto"
+    ) -> dict[str, str]:
         conversation = self.conversations.get(conversation_id)
-        prior = conversation.runs[-6:]
-        history = "\n".join(
-            f"{item.sequence}. {item.user_message[:600]}" for item in prior
-        )
-        effective_task = (
-            "This is a follow-up in an existing coding conversation. The workspace contains "
-            "the authoritative result of earlier turns. Inspect it before making claims.\n\n"
-            f"Earlier user requests:\n{history}\n\nCurrent user request:\n{message.strip()}"
-        )
+        decision = self.router.route(message, mode)
+        effective_task = self._follow_up_task(conversation, message, decision)
         run_id = self.start_run(
             effective_task,
             conversation_id=conversation_id,
             user_message=message,
+            requested_mode=decision.requested_mode,
+            intent=decision.intent,
+            route_reason=decision.reason,
         )
-        return {"conversation_id": conversation_id, "run_id": run_id}
+        return {
+            "conversation_id": conversation_id,
+            "run_id": run_id,
+            "intent": decision.intent,
+            "requested_mode": decision.requested_mode,
+            "route_reason": decision.reason,
+        }
+
+    def _follow_up_task(
+        self, conversation: Any, message: str, decision: RoutingDecision
+    ) -> str:
+        history: list[str] = []
+        for item in conversation.runs[-6:]:
+            history.append(f"User: {item.user_message[:600]}")
+            try:
+                snapshot = self.store.load(item.run_id)
+            except PersistenceError:
+                continue
+            answer = next(
+                (
+                    str(entry.get("content", ""))
+                    for entry in reversed(snapshot.messages)
+                    if entry.get("role") == "assistant"
+                    and entry.get("content")
+                    and not entry.get("tool_calls")
+                ),
+                "",
+            )
+            if answer:
+                history.append(f"MiniCode: {answer[:800]}")
+        transcript = "\n".join(history) or "(no previous completed turns)"
+        if decision.intent == "code":
+            instruction = (
+                "This is a follow-up coding task. The workspace is authoritative; inspect "
+                "current files before changing anything."
+            )
+        elif decision.intent == "read":
+            instruction = (
+                "Answer this follow-up repository question with read-only tool evidence. "
+                "Do not modify files."
+            )
+        else:
+            instruction = (
+                "Continue the conversation naturally. Do not claim repository access or changes."
+            )
+        return (
+            f"{instruction}\n\nRecent conversation:\n{transcript}\n\n"
+            f"Current user message:\n{message.strip()}"
+        )[:8_000]
 
     def list_conversations(self) -> list[dict[str, Any]]:
         payloads: list[dict[str, Any]] = []
@@ -190,33 +265,84 @@ class WebRunManager:
             if sequence > after
         ]
 
-    def _execute(self, run_id: str, task: str, cancel_event: threading.Event) -> None:
+    def _execute(
+        self,
+        run_id: str,
+        task: str,
+        cancel_event: threading.Event,
+        intent: str,
+        requested_mode: str,
+        route_reason: str,
+    ) -> None:
         try:
             trace_file = self.store.run_dir(run_id) / "events.jsonl"
-            tools = build_coding_registry(
-                self.workspace,
-                max_chars=self.settings.max_tool_chars,
-                command_timeout=self.settings.request_timeout,
-                delegation=ExploreDelegationConfig(
-                    parent_run_id=run_id,
-                    provider_factory=lambda: self.provider_factory(self.settings),
-                ),
+            sink = EventSink(trace_file, stream=io.StringIO())
+            sink.emit(
+                AgentEvent(
+                    type="intent_routed",
+                    run_id=run_id,
+                    data={
+                        "message": f"{requested_mode} → {intent}",
+                        "requested_mode": requested_mode,
+                        "intent": intent,
+                        "reason": route_reason,
+                    },
+                )
             )
-            CodingAgent(
-                provider=self.provider_factory(self.settings),
-                workspace=self.workspace,
-                tools=tools,
-                sink=EventSink(trace_file, stream=io.StringIO()),
-                max_steps=max(self.settings.max_steps, 16),
-                run_store=self.store,
-                context_manager=ContextManager(
-                    self.store,
-                    run_id,
-                    self.settings.max_context_chars,
-                    self.settings.artifact_threshold,
-                ),
-                should_stop=cancel_event.is_set,
-            ).run(task, run_id=run_id)
+            provider = self.provider_factory(self.settings)
+            if intent == "code":
+                tools = build_coding_registry(
+                    self.workspace,
+                    max_chars=self.settings.max_tool_chars,
+                    command_timeout=self.settings.request_timeout,
+                    delegation=ExploreDelegationConfig(
+                        parent_run_id=run_id,
+                        provider_factory=lambda: self.provider_factory(self.settings),
+                    ),
+                )
+                agent = CodingAgent(
+                    provider=provider,
+                    workspace=self.workspace,
+                    tools=tools,
+                    sink=sink,
+                    max_steps=max(self.settings.max_steps, 16),
+                    run_store=self.store,
+                    context_manager=ContextManager(
+                        self.store,
+                        run_id,
+                        self.settings.max_context_chars,
+                        self.settings.artifact_threshold,
+                    ),
+                    should_stop=cancel_event.is_set,
+                )
+            elif intent == "read":
+                agent = ReadOnlyAgent(
+                    provider=provider,
+                    workspace=self.workspace,
+                    tools=build_readonly_registry(
+                        self.workspace, self.settings.max_tool_chars
+                    ),
+                    sink=sink,
+                    max_steps=min(max(self.settings.max_steps, 2), 8),
+                    run_store=self.store,
+                    context_manager=ContextManager(
+                        self.store,
+                        run_id,
+                        self.settings.max_context_chars,
+                        self.settings.artifact_threshold,
+                    ),
+                    should_stop=cancel_event.is_set,
+                )
+            else:
+                agent = ChatAgent(
+                    provider=provider,
+                    workspace=self.workspace,
+                    tools=ToolRegistry(),
+                    sink=sink,
+                    run_store=self.store,
+                    should_stop=cancel_event.is_set,
+                )
+            agent.run(task, run_id=run_id)
         except Exception as exc:  # keep the HTTP server alive and expose a compact error
             with self._lock:
                 self._job_errors[run_id] = f"{type(exc).__name__}: {exc}"
@@ -264,7 +390,7 @@ class MiniCodeRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         if parsed.path == "/api/health":
-            self._json({"ok": True, "service": "mini-code-m4", "version": 2})
+            self._json({"ok": True, "service": "mini-code-m4", "version": 3})
             return
         if parsed.path == "/api/runs":
             self._api_call(lambda: self._json({"runs": self.server.manager.list_runs()}))
@@ -332,7 +458,10 @@ class MiniCodeRequestHandler(BaseHTTPRequestHandler):
         message = body.get("message")
         if not isinstance(message, str):
             raise WebError("message must be a string")
-        result = self.server.manager.start_conversation(message)
+        mode = body.get("mode", "auto")
+        if not isinstance(mode, str):
+            raise WebError("mode must be a string")
+        result = self.server.manager.start_conversation(message, mode)
         self._json({**result, "status": "starting"}, HTTPStatus.ACCEPTED)
 
     def _continue_conversation(self, conversation_id: str) -> None:
@@ -340,7 +469,10 @@ class MiniCodeRequestHandler(BaseHTTPRequestHandler):
         message = body.get("message")
         if not isinstance(message, str):
             raise WebError("message must be a string")
-        result = self.server.manager.continue_conversation(conversation_id, message)
+        mode = body.get("mode", "auto")
+        if not isinstance(mode, str):
+            raise WebError("mode must be a string")
+        result = self.server.manager.continue_conversation(conversation_id, message, mode)
         self._json({**result, "status": "starting"}, HTTPStatus.ACCEPTED)
 
     def _cancel_run(self, run_id: str) -> None:
